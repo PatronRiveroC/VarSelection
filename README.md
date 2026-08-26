@@ -3,3 +3,7 @@
 <p align="center">
   <img src="./images/graph.gif" width="800" alt="Pairwise Selection Animation">
 </p>
+
+<p align="center">
+  <img src="./images/ggm.gif" width="800" alt="Pairwise Selection Animation">
+</p>
