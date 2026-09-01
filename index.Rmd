@@ -1,0 +1,558 @@
+---
+title: "Variable selection"
+author: "Patron-Rivero, C. & López-Reyes, K."
+date: "2026"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    self_contained: false
+    code_folding: show
+    theme: flatly
+    highlight: tango
+---
+
+<style>
+h1.title{
+  font-size:2em;
+  text-align:center;
+  margin-bottom:0.3em;
+}
+
+.author{
+  font-size:1.1em;
+  text-align:center;
+}
+
+.main-container > div.section.level1 {
+  display: none !important;
+}
+
+.main-container > div.section.level1.active-section {
+  display: block !important;
+}
+</style>
+
+<script>
+(function () {
+
+  function init() {
+    if (typeof jQuery === 'undefined') {
+      // self_contained: false puede cargar jQuery de forma asíncrona;
+      // reintentamos en vez de abortar.
+      return setTimeout(init, 50);
+    }
+
+    var $ = jQuery;
+
+    $('body').removeAttr('data-spy').removeAttr('data-target');
+
+    var sections = $('.main-container > div.section.level1');
+
+    // Si el hash apunta a un subtítulo (##, ###...), devuelve el id
+    // de su sección de primer nivel (#) contenedora.
+    function getFirstOrderId(hash) {
+      var el = document.getElementById(hash);
+      if (!el) return null;
+      if ($(el).hasClass('level1')) return el.id;
+      var parent = $(el).closest('.main-container > div.section.level1');
+      return parent.length ? parent.attr('id') : null;
+    }
+
+    function showSection(targetId) {
+      var resolvedId = getFirstOrderId(targetId) || targetId;
+      sections.removeClass('active-section');
+      var active = sections.filter('#' + resolvedId);
+      if (active.length === 0) {
+        active = sections.first();
+      }
+      active.addClass('active-section');
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
+
+    var initialHash = window.location.hash.replace('#', '');
+    if (!initialHash && sections.length > 0) {
+      initialHash = sections.first().attr('id');
+    }
+    showSection(initialHash);
+
+    // Única forma de cambiar de sección de primer nivel: clic en el TOC.
+    // El scroll normal (rueda, touch, teclado) sigue funcionando libremente
+    // dentro de la sección activa para recorrer sus ##.
+    $(document).on('click', '#TOC a', function (e) {
+      e.preventDefault();
+      var href = $(this).attr('href');
+      if (href && href.indexOf('#') === 0) {
+        var targetId = href.replace('#', '');
+        showSection(targetId);
+        if (history.pushState) {
+          history.pushState(null, null, '#' + targetId);
+        }
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+
+})();
+</script>
+
+# Virtual species {.tabset}
+
+## Parametrization
+
+```{r warning = FALSE, message = FALSE, echo = FALSE}
+
+library(raster, quietly = T)
+library(terra)
+
+folder_path <- "D:/1_variable_selection/vars"
+asc_files <- list.files(path = folder_path, pattern = "\\.tif$", full.names = TRUE)
+wc_crop <- rast(asc_files)
+set.seed(123)
+
+```
+
+```{r warning = FALSE, message = FALSE}
+
+library(virtualspecies)
+
+vars <- sample(names(wc_crop), 3)
+
+param_list <- lapply(vars, function(v) {
+  x <- values(wc_crop[[v]], na.rm = TRUE)
+  c(fun = "dnorm", mean = mean(x, na.rm = TRUE), sd   = sd(x, na.rm = TRUE))
+})
+
+names(param_list) <- vars
+my.parameters <- do.call(formatFunctions, param_list)
+vars <- names(my.parameters)
+w <- 2^(seq_along(vars) - 1)
+w <- rev(w)
+form_str <- paste(paste0(w, " * ", vars), collapse = " + ")
+new.species <- generateSpFromFun(raster.stack = wc_crop[[vars]], parameters = my.parameters, formula = form_str, plot = FALSE)
+spp_3 <- new.species$suitab.raster
+
+```
+
+## Occurrences & Visualization
+
+```{r warning = FALSE, message = FALSE}
+
+library(geodata)
+library(sf)
+
+land <- geodata::world(path = "data/")
+ext_na <- ext(-100, -60, 30, 50)
+land_sub <- crop(land, ext_na)
+land_sf <- st_as_sf(land_sub)
+land_sf <- st_union(land_sf)
+pts_sf <- st_sample(land_sf, size = 50, type = "random", exact = TRUE)
+occ_land <- vect(pts_sf)
+occ_m <- project(occ_land, "EPSG:3857")
+buf_50km <- buffer(occ_m, width = 500000)
+buf_50km <- project(buf_50km, "EPSG:4326")
+buf_50km <- aggregate(buf_50km)
+
+```
+
+```{r warning = FALSE, message = FALSE, echo = FALSE}
+
+plot(new.species, axes = FALSE, box = FALSE, legend = FALSE)
+plot(buf_50km, add = TRUE, col = NA, border = "#9ecae1", lwd = 1.5)
+points(occ_land, pch = 4, cex = 0.9, col = "red", lwd = 1.5)
+
+```
+
+
+# Extract data
+
+```{r warning = FALSE, message = FALSE}
+
+library(terra)
+library(stringr)
+
+folder_path <- "D:/1_variable_selection/vars"
+asc_files <- list.files(path = folder_path, pattern = "\\.asc$", full.names = TRUE)
+vars_raster <- rast(asc_files)
+occ <- read.csv("D:/1_variable_selection/occ.csv")
+occ_extracted <- extract(vars_raster, occ[2:3])
+occ <- data.frame(occ_extracted[, -1])
+colnames(occ) <- str_extract(colnames(occ), "bio_\\d+") |> str_replace("bio_", "Bio")
+knitr::kable(head(occ), format = "markdown", digits = 2)
+
+```
+
+```{r warning = FALSE, message = FALSE, echo = FALSE}
+
+library(corrplot)
+
+library(corrplot)
+
+cor_p <- cor(occ, use = "complete.obs", method = "pearson")
+cor_s <- cor(occ, use = "complete.obs", method = "spearman")
+
+par(mfrow = c(1, 2))
+corrplot(cor_p, method = "color", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45, title = "A) Pearson", mar = c(0, 0, 1, 0))
+corrplot(cor_s, method = "color", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45, title = "B) Spearman", mar = c(0, 0, 1, 0))
+par(mfrow = c(1, 1))
+
+```
+
+# Direct correlation sets {.tabset}
+
+## Scenario 1: Pearson - 0.7
+
+```{r warning = FALSE, message = FALSE}
+
+library(ntbox)
+
+cor <- correlation_finder(cor_p, threshold = 0.7, verbose = FALSE)
+cor$descriptors
+
+```
+
+## Scenario 2: Pearson - 0.8
+
+```{r warning = FALSE, message = FALSE}
+
+library(ntbox)
+
+cor <- correlation_finder(cor_p, threshold = 0.8, verbose = FALSE)
+cor$descriptors
+
+```
+
+## Scenario 3: Spearman - 0.7
+
+```{r warning = FALSE, message = FALSE}
+
+library(ntbox)
+
+cor <- correlation_finder(cor_s, threshold = 0.7, verbose = FALSE)
+cor$descriptors
+
+```
+
+## Scenario 4: Spearman - 0.8
+
+```{r warning = FALSE, message = FALSE}
+
+library(ntbox)
+
+cor <- correlation_finder(cor_s, threshold = 0.8, verbose = FALSE)
+cor$descriptors
+
+```
+
+## Scenario 5: VIF - 10
+
+```{r warning = FALSE, message = FALSE}
+
+library(usdm)
+
+vif <- vifstep(occ,th = 10)
+vif
+
+```
+
+# Python implementations {.tabset}
+
+## Scenario 1: Graph Pearson - 0.7
+
+```{python}
+
+import pandas as pd
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+file_path = r"D:\1_variable_selection/occ_vars.csv"
+df = pd.read_csv(file_path)
+corr_matrix = df.corr(method='pearson').abs()
+threshold = 0.7
+
+G = nx.Graph()
+variables = corr_matrix.columns.tolist()
+G.add_nodes_from(variables)
+
+for i in range(len(variables)):
+    for j in range(i + 1, len(variables)):
+        var1 = variables[i]
+        var2 = variables[j]
+        if corr_matrix.loc[var1, var2] < threshold:
+            G.add_edge(var1, var2)
+
+uncorrelated_groups = list(nx.find_cliques(G))
+uncorrelated_groups.sort(key=len, reverse=True)
+
+filtered_groups = [group for group in uncorrelated_groups if len(group) >= 3]
+
+table_data = []
+for i, group in enumerate(filtered_groups, 1):
+    sorted_group = sorted(group)
+    table_data.append({
+        "Set": f"Set {i}",
+        "Size": len(group),
+        "Variables": ", ".join(sorted_group)
+    })
+
+table_df = pd.DataFrame(table_data)
+print(table_df.to_string(index=False))
+
+plt.figure(figsize=(5, 5))
+pos_general = nx.spring_layout(G, seed=42)
+nx.draw(G, pos_general, with_labels=True, node_color='skyblue', node_size=350, font_size=7, edge_color='gray', width=0.8)
+plt.title(f"Scenario1: Spearman (|r| < {threshold})", fontsize=10, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+```
+
+<div style="text-align: center;">
+  <img src="https://raw.githubusercontent.com/PatronRiveroC/VarSelection/main/gif/scenario1.gif" alt="Scenario 1" width="600px"/>
+</div>
+
+## Scenario 2: Graph Pearson - 0.8
+
+```{python}
+
+import pandas as pd
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+file_path = r"D:\1_variable_selection/occ_vars.csv"
+df = pd.read_csv(file_path)
+corr_matrix = df.corr(method='pearson').abs()
+threshold = 0.8
+
+G = nx.Graph()
+variables = corr_matrix.columns.tolist()
+G.add_nodes_from(variables)
+
+for i in range(len(variables)):
+    for j in range(i + 1, len(variables)):
+        var1 = variables[i]
+        var2 = variables[j]
+        if corr_matrix.loc[var1, var2] < threshold:
+            G.add_edge(var1, var2)
+
+uncorrelated_groups = list(nx.find_cliques(G))
+uncorrelated_groups.sort(key=len, reverse=True)
+
+filtered_groups = [group for group in uncorrelated_groups if len(group) >= 3]
+
+table_data = []
+for i, group in enumerate(filtered_groups, 1):
+    sorted_group = sorted(group)
+    table_data.append({
+        "Set": f"Set {i}",
+        "Size": len(group),
+        "Variables": ", ".join(sorted_group)
+    })
+
+table_df = pd.DataFrame(table_data)
+print(table_df.to_string(index=False))
+
+plt.figure(figsize=(5, 5))
+pos_general = nx.spring_layout(G, seed=42)
+nx.draw(G, pos_general, with_labels=True, node_color='skyblue', node_size=350, font_size=7, edge_color='gray', width=0.8)
+plt.title(f"Scenario1: Spearman (|r| < {threshold})", fontsize=10, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+```
+
+<div style="text-align: center;">
+  <img src="https://raw.githubusercontent.com/PatronRiveroC/VarSelection/main/gif/scenario2.gif" alt="Scenario 1" width="600px"/>
+</div>
+
+## Scenario 3: Graph Spearman - 0.7
+
+```{python}
+
+import pandas as pd
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+file_path = r"D:\1_variable_selection/occ_vars.csv"
+df = pd.read_csv(file_path)
+corr_matrix = df.corr(method='spearman').abs()
+threshold = 0.7
+
+G = nx.Graph()
+variables = corr_matrix.columns.tolist()
+G.add_nodes_from(variables)
+
+for i in range(len(variables)):
+    for j in range(i + 1, len(variables)):
+        var1 = variables[i]
+        var2 = variables[j]
+        if corr_matrix.loc[var1, var2] < threshold:
+            G.add_edge(var1, var2)
+
+uncorrelated_groups = list(nx.find_cliques(G))
+uncorrelated_groups.sort(key=len, reverse=True)
+
+filtered_groups = [group for group in uncorrelated_groups if len(group) >= 3]
+
+table_data = []
+for i, group in enumerate(filtered_groups, 1):
+    sorted_group = sorted(group)
+    table_data.append({
+        "Set": f"Set {i}",
+        "Size": len(group),
+        "Variables": ", ".join(sorted_group)
+    })
+
+table_df = pd.DataFrame(table_data)
+print(table_df.to_string(index=False))
+
+plt.figure(figsize=(5, 5))
+pos_general = nx.spring_layout(G, seed=42)
+nx.draw(G, pos_general, with_labels=True, node_color='skyblue', node_size=350, font_size=7, edge_color='gray', width=0.8)
+plt.title(f"Scenario1: Spearman (|r| < {threshold})", fontsize=10, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+```
+
+<div style="text-align: center;">
+  <img src="https://raw.githubusercontent.com/PatronRiveroC/VarSelection/main/gif/scenario3.gif" alt="Scenario 1" width="600px"/>
+</div>
+
+## Scenario 4: Graph Spearman - 0.8
+
+```{python}
+
+import pandas as pd
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+file_path = r"D:\1_variable_selection/occ_vars.csv"
+df = pd.read_csv(file_path)
+corr_matrix = df.corr(method='spearman').abs()
+threshold = 0.8
+
+G = nx.Graph()
+variables = corr_matrix.columns.tolist()
+G.add_nodes_from(variables)
+
+for i in range(len(variables)):
+    for j in range(i + 1, len(variables)):
+        var1 = variables[i]
+        var2 = variables[j]
+        if corr_matrix.loc[var1, var2] < threshold:
+            G.add_edge(var1, var2)
+
+uncorrelated_groups = list(nx.find_cliques(G))
+uncorrelated_groups.sort(key=len, reverse=True)
+
+filtered_groups = [group for group in uncorrelated_groups if len(group) >= 3]
+
+table_data = []
+for i, group in enumerate(filtered_groups, 1):
+    sorted_group = sorted(group)
+    table_data.append({
+        "Set": f"Set {i}",
+        "Size": len(group),
+        "Variables": ", ".join(sorted_group)
+    })
+
+table_df = pd.DataFrame(table_data)
+print(table_df.to_string(index=False))
+
+plt.figure(figsize=(5, 5))
+pos_general = nx.spring_layout(G, seed=42)
+nx.draw(G, pos_general, with_labels=True, node_color='skyblue', node_size=350, font_size=7, edge_color='gray', width=0.8)
+plt.title(f"Scenario1: Spearman (|r| < {threshold})", fontsize=10, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+```
+
+<div style="text-align: center;">
+  <img src="https://raw.githubusercontent.com/PatronRiveroC/VarSelection/main/gif/scenario4.gif" alt="Scenario 1" width="600px"/>
+</div>
+
+## Scenario 5: VIF - 10
+
+```{python}
+
+import numpy as np
+import pandas as pd
+
+ruta_csv = r"D:\1_variable_selection\occ_vars.csv"
+df = pd.read_csv(ruta_csv)
+
+def fast_vif(df_subset):
+    corr_matrix = df_subset.corr().values
+    try:
+        inv_corr = np.linalg.inv(corr_matrix)
+        return np.diag(inv_corr)
+    except np.linalg.LinAlgError:
+        return np.full(corr_matrix.shape[0], np.inf)
+
+def busqueda_recursiva_vif(datos, variables_actuales, umbral_vif, sets_aprobados, visitados):
+    tupla_vars = tuple(sorted(variables_actuales))
+    if tupla_vars in visitados:
+        return
+    visitados.add(tupla_vars)
+
+    if len(variables_actuales) < 3:
+        return
+
+    cols = list(variables_actuales)
+    vifs = fast_vif(datos[cols])
+    max_vif = np.max(vifs)
+
+    if max_vif < umbral_vif:
+        sets_aprobados.add((tupla_vars, max_vif))
+        return
+
+    for i, variable in enumerate(cols):
+        if vifs[i] > (umbral_vif * 0.5):
+            nuevo_set = variables_actuales - {variable}
+            busqueda_recursiva_vif(datos, nuevo_set, umbral_vif, sets_aprobados, visitados)
+
+umbral_estricto_vif = 10.0
+sets_crudos_aprobados = set()
+memoria_visitados = set()
+todas_las_variables = set(df.columns)
+
+busqueda_recursiva_vif(df, todas_las_variables, umbral_estricto_vif, sets_crudos_aprobados, memoria_visitados)
+
+sets_ordenados_por_tamaño = sorted([s[0] for s in sets_crudos_aprobados], key=len, reverse=True)
+sets_finales_maximos = []
+
+for s in sets_ordenados_por_tamaño:
+    set_actual = set(s)
+    es_subconjunto = any(set_actual.issubset(set(set_max)) for set_max in sets_finales_maximos)
+    if not es_subconjunto:
+        sets_finales_maximos.append(s)
+
+resultados_con_vif = []
+for s in sets_finales_maximos:
+    vif_max = np.max(fast_vif(df[list(s)]))
+    resultados_con_vif.append((s, vif_max))
+
+resultados_con_vif = sorted(resultados_con_vif, key=lambda x: len(x[0]), reverse=True)
+
+table_data = []
+for i, (set_vars, max_v) in enumerate(resultados_con_vif, 1):
+    table_data.append({
+        "Set": f"Set {i}",
+        "Size": len(set_vars),
+        "Max VIF": round(max_v, 2),
+        "Variables": ", ".join(sorted(set_vars))
+    })
+
+table_df = pd.DataFrame(table_data)
+print(table_df.to_string(index=False))
+
+```
